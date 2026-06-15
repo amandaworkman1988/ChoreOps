@@ -111,6 +111,60 @@ def chore_manager(
     return manager
 
 
+def test_overdue_resolution_signal_uses_time_in_overdue_state(
+    chore_manager: ChoreManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Leaving overdue should emit duration from overdue entry to resolution."""
+    assignee_id = "assignee-1"
+    chore_id = "chore-1"
+    assignee_chore_data = chore_manager._get_assignee_chore_data(
+        assignee_id,
+        chore_id,
+    )
+    timestamps = iter(
+        [
+            "2026-02-10T08:00:00+00:00",
+            "2026-02-10T10:30:00+00:00",
+        ]
+    )
+    monkeypatch.setattr(
+        "custom_components.choreops.managers.chore_manager.dt_now_utc_iso",
+        lambda: next(timestamps),
+    )
+
+    chore_manager._set_assignee_chore_state(
+        assignee_id,
+        chore_id,
+        assignee_chore_data,
+        const.CHORE_STATE_OVERDUE,
+    )
+    chore_manager._set_assignee_chore_state(
+        assignee_id,
+        chore_id,
+        assignee_chore_data,
+        const.CHORE_STATE_PENDING,
+    )
+    chore_manager._flush_overdue_resolution_signals()
+
+    assert const.DATA_USER_CHORE_DATA_OVERDUE_STARTED_AT not in assignee_chore_data
+    chore_manager.emit.assert_called_once()
+    suffix = chore_manager.emit.call_args.args[0]
+    payload = chore_manager.emit.call_args.kwargs
+    assert suffix == const.SIGNAL_SUFFIX_CHORE_OVERDUE_RESOLVED
+    assert payload["user_id"] == assignee_id
+    assert payload["chore_id"] == chore_id
+    assert payload[const.CHORE_OVERDUE_RESOLVED_EVENT_DURATION_SECONDS] == 9000
+    assert (
+        payload[const.CHORE_OVERDUE_RESOLVED_EVENT_STARTED_AT]
+        == "2026-02-10T08:00:00+00:00"
+    )
+    assert (
+        payload[const.CHORE_OVERDUE_RESOLVED_EVENT_RESOLVED_AT]
+        == "2026-02-10T10:30:00+00:00"
+    )
+
+
 # ============================================================================
 # Test Class: Basic Validation
 # ============================================================================

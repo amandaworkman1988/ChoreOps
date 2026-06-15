@@ -107,6 +107,10 @@ def repair_impossible_due_state_residue(data: dict[str, Any]) -> dict[str, int]:
                 assignee_chore_data[const.DATA_USER_CHORE_DATA_STATE] = (
                     const.CHORE_STATE_PENDING
                 )
+                assignee_chore_data.pop(
+                    const.DATA_USER_CHORE_DATA_OVERDUE_STARTED_AT,
+                    None,
+                )
                 current_state = const.CHORE_STATE_PENDING
                 summary["assignee_states_normalized"] += 1
                 chore_changed = True

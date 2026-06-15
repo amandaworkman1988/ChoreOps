@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import MethodType, SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 from custom_components.choreops import const
+from custom_components.choreops.engines.statistics_engine import StatisticsEngine
 from custom_components.choreops.managers.statistics_manager import StatisticsManager
 
 
@@ -20,6 +23,12 @@ def test_empty_report_rollup_uses_points_spent_keys() -> None:
     assert "all_time_points_spent" in rewards
     assert "in_range_points" not in rewards
     assert "all_time_points" not in rewards
+
+    chores = rollup["chores"]
+    assert chores["in_range_avg_overdue_seconds"] == 0.0
+    assert chores["in_range_longest_overdue_seconds"] == 0
+    assert chores["all_time_avg_overdue_seconds"] == 0.0
+    assert chores["all_time_longest_overdue_seconds"] == 0
 
 
 def test_get_report_rollup_returns_normalized_reward_keys() -> None:
@@ -71,11 +80,25 @@ def test_get_report_rollup_returns_normalized_reward_keys() -> None:
             "all_time_longest_missed_streak": 0,
         }
 
+    def _rollup_overdue_duration(
+        _self: StatisticsManager,
+        _periods: dict[str, Any],
+        _start_iso: str,
+        _end_iso: str,
+    ) -> dict[str, int | float]:
+        return {
+            "in_range_avg_overdue_seconds": 0.0,
+            "in_range_longest_overdue_seconds": 0,
+            "all_time_avg_overdue_seconds": 0.0,
+            "all_time_longest_overdue_seconds": 0,
+        }
+
     manager._get_assignee = MethodType(_get_assignee, manager)
     manager._rollup_period_metrics = MethodType(_rollup_period_metrics, manager)
     manager._rollup_period_collections = MethodType(_rollup_period_collections, manager)
     manager._get_badge_rollup = MethodType(_get_badge_rollup, manager)
     manager._get_streak_rollup = MethodType(_get_streak_rollup, manager)
+    manager._rollup_overdue_duration = MethodType(_rollup_overdue_duration, manager)
 
     rollup = StatisticsManager.get_report_rollup(
         manager,
@@ -89,6 +112,183 @@ def test_get_report_rollup_returns_normalized_reward_keys() -> None:
     assert "all_time_points_spent" in rewards
     assert "in_range_points" not in rewards
     assert "all_time_points" not in rewards
+    assert rollup["chores"]["in_range_avg_overdue_seconds"] == 0.0
+
+
+def test_rollup_overdue_duration_uses_average_and_max() -> None:
+    """Overdue duration rollup should average totals and max longest values."""
+    manager = StatisticsManager.__new__(StatisticsManager)
+    manager._coordinator = SimpleNamespace(stats=StatisticsEngine())
+
+    periods = {
+        const.PERIOD_DAILY: {
+            "2026-02-10": {
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS: 3600,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT: 1,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: 3600,
+            },
+            "2026-02-11": {
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS: 10800,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT: 2,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: 7200,
+            },
+            "2026-02-20": {
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS: 86400,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT: 1,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: 86400,
+            },
+        },
+        const.PERIOD_ALL_TIME: {
+            const.PERIOD_ALL_TIME: {
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS: 100800,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT: 4,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: 86400,
+            }
+        },
+    }
+
+    rollup = StatisticsManager._rollup_overdue_duration(
+        manager,
+        periods,
+        start_iso="2026-02-10T00:00:00+00:00",
+        end_iso="2026-02-11T23:59:59+00:00",
+    )
+
+    assert rollup["in_range_avg_overdue_seconds"] == 4800.0
+    assert rollup["in_range_longest_overdue_seconds"] == 7200
+    assert rollup["all_time_avg_overdue_seconds"] == 25200.0
+    assert rollup["all_time_longest_overdue_seconds"] == 86400
+
+
+def test_record_chore_transaction_writes_overdue_duration_to_both_buckets() -> None:
+    """Overdue duration stats should write to per-chore and assignee rollups."""
+    manager = StatisticsManager.__new__(StatisticsManager)
+    assignee_id = "assignee-1"
+    chore_id = "chore-1"
+    per_chore_periods: dict[str, Any] = {}
+    assignee_chore_periods: dict[str, Any] = {}
+
+    manager._coordinator = SimpleNamespace(
+        stats=StatisticsEngine(),
+        config_entry=SimpleNamespace(options={}),
+        assignees_data={
+            assignee_id: {
+                const.DATA_USER_CHORE_DATA: {
+                    chore_id: {
+                        const.DATA_USER_CHORE_DATA_PERIODS: per_chore_periods,
+                    }
+                },
+                const.DATA_USER_CHORE_PERIODS: assignee_chore_periods,
+            }
+        },
+    )
+
+    def _get_assignee(
+        _self: StatisticsManager, current_assignee_id: str
+    ) -> dict[str, Any]:
+        return _self._coordinator.assignees_data[current_assignee_id]
+
+    manager._get_assignee = MethodType(_get_assignee, manager)
+
+    recorded = StatisticsManager._record_chore_transaction(
+        manager,
+        assignee_id,
+        chore_id,
+        increments={
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE: 1,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS: 7200,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT: 1,
+        },
+        maximums={
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: 7200,
+        },
+        persist=False,
+    )
+
+    assert recorded is True
+    for periods in (per_chore_periods, assignee_chore_periods):
+        all_time = periods[const.PERIOD_ALL_TIME][const.PERIOD_ALL_TIME]
+        assert all_time[const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE] == 1
+        assert (
+            all_time[const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS]
+            == 7200
+        )
+        assert all_time[const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT] == 1
+        assert (
+            all_time[const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS]
+            == 7200
+        )
+
+
+def test_chore_overdue_resolved_records_duration_to_both_buckets() -> None:
+    """Resolved overdue event records duration without adding another overdue count."""
+    manager = StatisticsManager.__new__(StatisticsManager)
+    assignee_id = "assignee-1"
+    chore_id = "chore-1"
+    per_chore_periods: dict[str, Any] = {}
+    assignee_chore_periods: dict[str, Any] = {}
+
+    manager._coordinator = SimpleNamespace(
+        stats=StatisticsEngine(),
+        config_entry=SimpleNamespace(options={}),
+        assignees_data={
+            assignee_id: {
+                const.DATA_USER_CHORE_DATA: {
+                    chore_id: {
+                        const.DATA_USER_CHORE_DATA_PERIODS: per_chore_periods,
+                    }
+                },
+                const.DATA_USER_CHORE_PERIODS: assignee_chore_periods,
+            }
+        },
+        _data={},
+        _persist=MagicMock(),
+        async_set_updated_data=MagicMock(),
+    )
+
+    def _get_assignee(
+        _self: StatisticsManager, current_assignee_id: str
+    ) -> dict[str, Any]:
+        return _self._coordinator.assignees_data[current_assignee_id]
+
+    def _refresh_chore_cache(
+        _self: StatisticsManager, _current_assignee_id: str
+    ) -> None:
+        return None
+
+    def _emit_stats_updated(
+        _self: StatisticsManager, _current_assignee_id: str
+    ) -> None:
+        return None
+
+    manager._get_assignee = MethodType(_get_assignee, manager)
+    manager._refresh_chore_cache = MethodType(_refresh_chore_cache, manager)
+    manager._emit_stats_updated = MethodType(_emit_stats_updated, manager)
+
+    asyncio.run(
+        StatisticsManager._on_chore_overdue_resolved(
+            manager,
+            {
+                "user_id": assignee_id,
+                "chore_id": chore_id,
+                const.CHORE_OVERDUE_RESOLVED_EVENT_DURATION_SECONDS: 7200,
+                const.CHORE_OVERDUE_RESOLVED_EVENT_RESOLVED_AT: "2026-02-10T10:00:00+00:00",
+            },
+        )
+    )
+
+    for periods in (per_chore_periods, assignee_chore_periods):
+        all_time = periods[const.PERIOD_ALL_TIME][const.PERIOD_ALL_TIME]
+        assert const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE not in all_time
+        assert (
+            all_time[const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS]
+            == 7200
+        )
+        assert all_time[const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT] == 1
+        assert (
+            all_time[const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS]
+            == 7200
+        )
 
 
 def test_get_stats_rehydrates_partial_cache_entry() -> None:

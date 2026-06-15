@@ -324,6 +324,109 @@ class TestRecordTransaction:
         assert bucket["bonus"] == 5
 
 
+class TestRecordMaximum:
+    """Tests for record_maximum method."""
+
+    def test_records_maximum_in_all_period_buckets(
+        self, stats: StatisticsEngine, sample_period_data: dict[str, Any]
+    ) -> None:
+        """Should write high-water marks in all period buckets."""
+        stats.record_maximum(
+            sample_period_data,
+            maximums={
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: 3600,
+            },
+            reference_date=date(2026, 1, 19),
+        )
+
+        assert (
+            sample_period_data["daily"]["2026-01-19"][
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS
+            ]
+            == 3600
+        )
+        assert (
+            sample_period_data["weekly"]["2026-W04"][
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS
+            ]
+            == 3600
+        )
+        assert (
+            sample_period_data["monthly"]["2026-01"][
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS
+            ]
+            == 3600
+        )
+        assert (
+            sample_period_data["yearly"]["2026"][
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS
+            ]
+            == 3600
+        )
+        assert (
+            sample_period_data["all_time"]["all_time"][
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS
+            ]
+            == 3600
+        )
+
+    def test_keeps_existing_higher_value(
+        self, stats: StatisticsEngine, sample_period_data: dict[str, Any]
+    ) -> None:
+        """Lower observations should not reduce an existing maximum."""
+        ref_date = date(2026, 1, 19)
+
+        stats.record_maximum(
+            sample_period_data,
+            maximums={
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: 7200,
+            },
+            reference_date=ref_date,
+        )
+        stats.record_maximum(
+            sample_period_data,
+            maximums={
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: 1800,
+            },
+            reference_date=ref_date,
+        )
+
+        assert (
+            sample_period_data["daily"]["2026-01-19"][
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS
+            ]
+            == 7200
+        )
+        assert (
+            sample_period_data["all_time"]["all_time"][
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS
+            ]
+            == 7200
+        )
+
+    def test_custom_period_key_mapping(self, stats: StatisticsEngine) -> None:
+        """Should support custom period container keys."""
+        data: dict[str, Any] = {}
+        custom_mapping = {
+            const.PERIOD_DAILY: "d",
+            const.PERIOD_WEEKLY: "w",
+            const.PERIOD_MONTHLY: "m",
+            const.PERIOD_YEARLY: "y",
+        }
+
+        stats.record_maximum(
+            data,
+            maximums={"max_value": 12},
+            period_key_mapping=custom_mapping,
+            reference_date=date(2026, 1, 19),
+        )
+
+        assert data["d"]["2026-01-19"]["max_value"] == 12
+        assert data["w"]["2026-W04"]["max_value"] == 12
+        assert data["m"]["2026-01"]["max_value"] == 12
+        assert data["y"]["2026"]["max_value"] == 12
+
+
 class TestUpdateStreak:
     """Tests for update_streak method."""
 

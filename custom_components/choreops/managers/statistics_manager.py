@@ -17,6 +17,7 @@ Event subscriptions:
 - SIGNAL_SUFFIX_CHORE_CLAIMED → _on_chore_claimed()
 - SIGNAL_SUFFIX_CHORE_DISAPPROVED → _on_chore_disapproved()
 - SIGNAL_SUFFIX_CHORE_OVERDUE → _on_chore_overdue()
+- SIGNAL_SUFFIX_CHORE_OVERDUE_RESOLVED → _on_chore_overdue_resolved()
 - SIGNAL_SUFFIX_REWARD_APPROVED → _on_reward_approved()
 
 PHASE 7.5 ARCHITECTURE (Statistics Presenter & Data Sanitization):
@@ -39,6 +40,7 @@ from homeassistant.core import callback
 
 from .. import const
 from ..utils.dt_utils import dt_add_interval, dt_now_local, dt_parse
+from ..utils.math_utils import calculate_average
 from .base_manager import BaseManager
 
 if TYPE_CHECKING:
@@ -135,6 +137,10 @@ class StatisticsManager(BaseManager):
         self.listen(const.SIGNAL_SUFFIX_CHORE_CLAIMED, self._on_chore_claimed)
         self.listen(const.SIGNAL_SUFFIX_CHORE_DISAPPROVED, self._on_chore_disapproved)
         self.listen(const.SIGNAL_SUFFIX_CHORE_OVERDUE, self._on_chore_overdue)
+        self.listen(
+            const.SIGNAL_SUFFIX_CHORE_OVERDUE_RESOLVED,
+            self._on_chore_overdue_resolved,
+        )
         self.listen(const.SIGNAL_SUFFIX_CHORE_MISSED, self._on_chore_missed)
 
         # Quiet transitions - state changes without bucket writes (snapshot only)
@@ -649,7 +655,7 @@ class StatisticsManager(BaseManager):
             )
 
     async def _on_chore_overdue(self, payload: dict[str, Any]) -> None:
-        """Handle CHORE_OVERDUE event - record overdue to period buckets.
+        """Handle CHORE_OVERDUE event - record overdue count to period buckets.
 
         Enforces max 1 overdue per day by checking today's bucket value before
         incrementing. This ensures daily buckets never exceed 1 for overdue count.
@@ -690,11 +696,15 @@ class StatisticsManager(BaseManager):
                 )
                 return
 
+        increments: dict[str, int | float] = {
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE: 1,
+        }
+
         # Proceed with increment (will create bucket if needed)
         if self._record_chore_transaction(
             assignee_id,
             chore_id,
-            {const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE: 1},
+            increments,
         ):
             # Transactional Flush: cache was refreshed inside _record_chore_transaction,
             # now notify sensors that data has changed
@@ -703,6 +713,52 @@ class StatisticsManager(BaseManager):
                 "StatisticsManager._on_chore_overdue: assignee=%s, chore=%s",
                 assignee_id,
                 chore_id,
+            )
+
+    async def _on_chore_overdue_resolved(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_OVERDUE_RESOLVED event - record time in overdue state."""
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+        raw_duration = payload.get(const.CHORE_OVERDUE_RESOLVED_EVENT_DURATION_SECONDS)
+        resolved_at = payload.get(const.CHORE_OVERDUE_RESOLVED_EVENT_RESOLVED_AT)
+
+        if raw_duration is None:
+            const.LOGGER.warning(
+                "StatisticsManager._on_chore_overdue_resolved: Missing duration for assignee=%s, chore=%s",
+                assignee_id,
+                chore_id,
+            )
+            return
+
+        try:
+            overdue_duration_seconds = max(0, int(raw_duration))
+        except (TypeError, ValueError):
+            const.LOGGER.warning(
+                "StatisticsManager._on_chore_overdue_resolved: Invalid duration=%s for assignee=%s, chore=%s",
+                raw_duration,
+                assignee_id,
+                chore_id,
+            )
+            return
+
+        if self._record_chore_transaction(
+            assignee_id,
+            chore_id,
+            {
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS: overdue_duration_seconds,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT: 1,
+            },
+            effective_date=resolved_at,
+            maximums={
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: overdue_duration_seconds,
+            },
+        ):
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_overdue_resolved: assignee=%s, chore=%s, duration=%s",
+                assignee_id,
+                chore_id,
+                overdue_duration_seconds,
             )
 
     async def _on_chore_missed(self, payload: dict[str, Any]) -> None:
@@ -1366,6 +1422,7 @@ class StatisticsManager(BaseManager):
         chore_id: str,
         increments: dict[str, int | float],
         effective_date: str | None = None,
+        maximums: dict[str, int | float] | None = None,
         persist: bool = True,
     ) -> bool:
         """Record a chore transaction to period buckets.
@@ -1383,6 +1440,7 @@ class StatisticsManager(BaseManager):
             increments: Dict of metric keys to increment values.
             effective_date: ISO timestamp for approver-lag-proof bucketing.
                            If None, uses current time.
+            maximums: Optional metric high-water marks to write to the same buckets.
             persist: If True, calls _persist() and _refresh_chore_cache().
                     Set to False when batching multiple assignees.
 
@@ -1458,6 +1516,12 @@ class StatisticsManager(BaseManager):
             increments,
             reference_date=bucket_dt,
         )
+        if maximums:
+            self._stats_engine.record_maximum(
+                periods,
+                maximums,
+                reference_date=bucket_dt,
+            )
 
         # PHASE 2: Also record to assignee-level chore_periods bucket (v44+)
         # ChoreManager (Landlord) should have created this via _ensure_assignee_structures(assignee_id)
@@ -1469,6 +1533,12 @@ class StatisticsManager(BaseManager):
                 increments,
                 reference_date=bucket_dt,
             )
+            if maximums:
+                self._stats_engine.record_maximum(
+                    assignee_chore_periods,
+                    maximums,
+                    reference_date=bucket_dt,
+                )
         else:
             const.LOGGER.warning(
                 "StatisticsManager._record_chore_transaction: assignee-level chore_periods missing for "
@@ -1709,6 +1779,11 @@ class StatisticsManager(BaseManager):
             start_iso,
             end_iso,
         )
+        overdue_duration_rollup = self._rollup_overdue_duration(
+            chore_periods,
+            start_iso,
+            end_iso,
+        )
         rewards_rollup = self._rollup_period_metrics(
             reward_periods,
             [
@@ -1798,6 +1873,12 @@ class StatisticsManager(BaseManager):
                 "in_range_overdue": int(
                     chores_rollup["in_range"][const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE]
                 ),
+                "in_range_avg_overdue_seconds": overdue_duration_rollup[
+                    "in_range_avg_overdue_seconds"
+                ],
+                "in_range_longest_overdue_seconds": overdue_duration_rollup[
+                    "in_range_longest_overdue_seconds"
+                ],
                 "all_time_approved": int(
                     chores_rollup["all_time"][
                         const.DATA_USER_CHORE_DATA_PERIOD_APPROVED
@@ -1817,6 +1898,12 @@ class StatisticsManager(BaseManager):
                 "all_time_overdue": int(
                     chores_rollup["all_time"][const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE]
                 ),
+                "all_time_avg_overdue_seconds": overdue_duration_rollup[
+                    "all_time_avg_overdue_seconds"
+                ],
+                "all_time_longest_overdue_seconds": overdue_duration_rollup[
+                    "all_time_longest_overdue_seconds"
+                ],
             },
             "rewards": {
                 "in_range_approved": int(
@@ -1929,11 +2016,15 @@ class StatisticsManager(BaseManager):
                 "in_range_disapproved": 0,
                 "in_range_missed": 0,
                 "in_range_overdue": 0,
+                "in_range_avg_overdue_seconds": 0.0,
+                "in_range_longest_overdue_seconds": 0,
                 "all_time_approved": 0,
                 "all_time_claimed": 0,
                 "all_time_disapproved": 0,
                 "all_time_missed": 0,
                 "all_time_overdue": 0,
+                "all_time_avg_overdue_seconds": 0.0,
+                "all_time_longest_overdue_seconds": 0,
             },
             "rewards": {
                 "in_range_approved": 0,
@@ -1969,6 +2060,54 @@ class StatisticsManager(BaseManager):
                 "earned_badge_names": [],
                 "by_badge": {},
             },
+        }
+
+    def _rollup_overdue_duration(
+        self,
+        periods: dict[str, Any],
+        start_iso: str,
+        end_iso: str,
+    ) -> dict[str, int | float]:
+        """Return average and longest overdue duration rollups."""
+        total_metric = const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS
+        count_metric = const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT
+        max_metric = const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS
+
+        in_range = self._sum_daily_metrics(
+            periods,
+            [total_metric, count_metric],
+            start_iso,
+            end_iso,
+        )
+        in_range_max = self._max_daily_metric(periods, max_metric, start_iso, end_iso)
+
+        all_time_total = self._stats_engine.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            total_metric,
+        )
+        all_time_count = self._stats_engine.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            count_metric,
+        )
+        all_time_max = self._stats_engine.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            max_metric,
+        )
+
+        return {
+            "in_range_avg_overdue_seconds": calculate_average(
+                in_range[total_metric],
+                in_range[count_metric],
+            ),
+            "in_range_longest_overdue_seconds": in_range_max,
+            "all_time_avg_overdue_seconds": calculate_average(
+                all_time_total,
+                all_time_count,
+            ),
+            "all_time_longest_overdue_seconds": all_time_max,
         }
 
     def _rollup_period_metrics(
@@ -2166,6 +2305,41 @@ class StatisticsManager(BaseManager):
                     sums[metric] = sums[metric] + value
 
         return sums
+
+    def _max_daily_metric(
+        self,
+        periods: dict[str, Any],
+        metric: str,
+        start_iso: str,
+        end_iso: str,
+    ) -> int | float:
+        """Return the maximum daily metric value in a date range."""
+        parsed_start = dt_parse(start_iso)
+        parsed_end = dt_parse(end_iso)
+        if not isinstance(parsed_start, datetime) or not isinstance(
+            parsed_end, datetime
+        ):
+            return 0
+
+        start_key = parsed_start.date().isoformat()
+        end_key = parsed_end.date().isoformat()
+
+        daily_data = periods.get(const.PERIOD_DAILY, {})
+        if not isinstance(daily_data, dict):
+            return 0
+
+        max_value: int | float = 0
+        for day_key, bucket in daily_data.items():
+            if not isinstance(day_key, str) or not isinstance(bucket, dict):
+                continue
+            if day_key < start_key or day_key > end_key:
+                continue
+
+            value = bucket.get(metric, 0)
+            if isinstance(value, (int, float)):
+                max_value = max(max_value, value)
+
+        return max_value
 
     def _get_assignee(self, assignee_id: str) -> dict[str, Any] | None:
         """Get assignee data by ID.
@@ -2450,6 +2624,14 @@ class StatisticsManager(BaseManager):
             const.PRES_USER_CHORES_MISSED_WEEK: 0,
             const.PRES_USER_CHORES_MISSED_MONTH: 0,
             const.PRES_USER_CHORES_MISSED_YEAR: 0,
+            const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_TODAY: 0.0,
+            const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_WEEK: 0.0,
+            const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_MONTH: 0.0,
+            const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_YEAR: 0.0,
+            const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_TODAY: 0,
+            const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_WEEK: 0,
+            const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_MONTH: 0,
+            const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_YEAR: 0,
             const.PRES_USER_CHORES_POINTS_TODAY: 0.0,
             const.PRES_USER_CHORES_POINTS_WEEK: 0.0,
             const.PRES_USER_CHORES_POINTS_MONTH: 0.0,
@@ -2675,6 +2857,18 @@ class StatisticsManager(BaseManager):
         missed_week = 0
         missed_month = 0
         missed_year = 0
+        overdue_duration_total_today = 0
+        overdue_duration_total_week = 0
+        overdue_duration_total_month = 0
+        overdue_duration_total_year = 0
+        overdue_duration_count_today = 0
+        overdue_duration_count_week = 0
+        overdue_duration_count_month = 0
+        overdue_duration_count_year = 0
+        overdue_duration_max_today = 0
+        overdue_duration_max_week = 0
+        overdue_duration_max_month = 0
+        overdue_duration_max_year = 0
         points_today = 0.0
         points_week = 0.0
         points_month = 0.0
@@ -2732,6 +2926,21 @@ class StatisticsManager(BaseManager):
                 const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED, 0
             )
             missed_today += today_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_MISSED, 0)
+            overdue_duration_total_today += today_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+                0,
+            )
+            overdue_duration_count_today += today_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+                0,
+            )
+            overdue_duration_max_today = max(
+                overdue_duration_max_today,
+                today_entry.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                    0,
+                ),
+            )
             points_today += today_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_POINTS, 0)
 
             # Weekly
@@ -2746,6 +2955,21 @@ class StatisticsManager(BaseManager):
             completed_week += week_completed
             claimed_week += week_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED, 0)
             missed_week += week_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_MISSED, 0)
+            overdue_duration_total_week += week_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+                0,
+            )
+            overdue_duration_count_week += week_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+                0,
+            )
+            overdue_duration_max_week = max(
+                overdue_duration_max_week,
+                week_entry.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                    0,
+                ),
+            )
             points_week += week_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_POINTS, 0)
             if week_completed > 0:
                 chore_completed_week[chore_id] = week_completed
@@ -2766,6 +2990,21 @@ class StatisticsManager(BaseManager):
                 const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED, 0
             )
             missed_month += month_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_MISSED, 0)
+            overdue_duration_total_month += month_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+                0,
+            )
+            overdue_duration_count_month += month_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+                0,
+            )
+            overdue_duration_max_month = max(
+                overdue_duration_max_month,
+                month_entry.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                    0,
+                ),
+            )
             points_month += month_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_POINTS, 0)
             if month_completed > 0:
                 chore_completed_month[chore_id] = month_completed
@@ -2782,6 +3021,21 @@ class StatisticsManager(BaseManager):
             completed_year += year_completed
             claimed_year += year_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED, 0)
             missed_year += year_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_MISSED, 0)
+            overdue_duration_total_year += year_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+                0,
+            )
+            overdue_duration_count_year += year_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+                0,
+            )
+            overdue_duration_max_year = max(
+                overdue_duration_max_year,
+                year_entry.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                    0,
+                ),
+            )
             points_year += year_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_POINTS, 0)
             if year_completed > 0:
                 chore_completed_year[chore_id] = year_completed
@@ -2818,6 +3072,36 @@ class StatisticsManager(BaseManager):
         cache[const.PRES_USER_CHORES_MISSED_MONTH] = missed_month
         cache[const.PRES_USER_CHORES_MISSED_YEAR] = missed_year
         # NOTE: all_time stats omitted from cache - must be read from storage only
+
+        cache[const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_TODAY] = calculate_average(
+            overdue_duration_total_today,
+            overdue_duration_count_today,
+        )
+        cache[const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_WEEK] = calculate_average(
+            overdue_duration_total_week,
+            overdue_duration_count_week,
+        )
+        cache[const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_MONTH] = calculate_average(
+            overdue_duration_total_month,
+            overdue_duration_count_month,
+        )
+        cache[const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_YEAR] = calculate_average(
+            overdue_duration_total_year,
+            overdue_duration_count_year,
+        )
+        cache[const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_TODAY] = (
+            overdue_duration_max_today
+        )
+        cache[const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_WEEK] = (
+            overdue_duration_max_week
+        )
+        cache[const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_MONTH] = (
+            overdue_duration_max_month
+        )
+        cache[const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_YEAR] = (
+            overdue_duration_max_year
+        )
+
         cache[const.PRES_USER_CHORES_POINTS_TODAY] = round(
             points_today, const.DATA_FLOAT_PRECISION
         )
