@@ -17,6 +17,8 @@ import pytest
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
+from homeassistant.core import Context
+
 from custom_components.choreops.utils.dt_utils import dt_now_utc
 
 # Import test constants from helpers (not from const.py - Rule 0)
@@ -426,3 +428,108 @@ async def test_primary_paused_standby_activates(
         CHORE_STATE_DUE,
     )
     assert get_chore_state_from_sensor(hass, "max", chore_name) == CHORE_STATE_STANDBY
+
+
+# =============================================================================
+# T11 — Multi-standby rotation when primary is paused
+# =============================================================================
+
+
+@pytest.fixture
+async def scenario_primary_standby_multi(
+    hass: HomeAssistant,
+    mock_hass_users: dict[str, Any],
+) -> SetupResult:
+    """Load multi-standby scenario: 1 primary + 3 standbys."""
+    return await setup_from_yaml(
+        hass,
+        mock_hass_users,
+        "tests/scenarios/scenario_primary_standby_multi.yaml",
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_standby_rotates_when_primary_paused(
+    hass: HomeAssistant,
+    mock_hass_users: dict[str, Any],
+    scenario_primary_standby_multi: SetupResult,
+) -> None:
+    """With primary paused, turn rotates among standbys on each completion."""
+    await hass.async_block_till_done()
+
+    chore_name = "Rotating Standby Chore"
+    coordinator = scenario_primary_standby_multi.coordinator
+    zoe_id = scenario_primary_standby_multi.assignee_ids.get("Zoë")
+    approver_context = Context(user_id=mock_hass_users["approver1"].id)
+    assignee2_context = Context(user_id=mock_hass_users["assignee2"].id)
+    assignee3_context = Context(user_id=mock_hass_users["assignee3"].id)
+    assignee4_context = Context(user_id=mock_hass_users["assignee4"].id)
+
+    # Baseline: Zoë is primary, standbys see standby
+    assert get_chore_state_from_sensor(hass, "zoe", chore_name) in (
+        CHORE_STATE_PENDING,
+        CHORE_STATE_DUE,
+    )
+    for slug in ("max", "lila", "leo"):
+        assert (
+            get_chore_state_from_sensor(hass, slug, chore_name) == CHORE_STATE_STANDBY
+        )
+
+    # Pause Zoë (primary)
+    await coordinator.chore_manager.set_user_chores_paused(zoe_id, paused=True)
+    await hass.async_block_till_done()
+
+    # Max should become active (first non-paused standby)
+    assert get_chore_state_from_sensor(hass, "max", chore_name) in (
+        CHORE_STATE_PENDING,
+        CHORE_STATE_DUE,
+    )
+
+    # Max claims and completes the chore
+    await claim_chore(hass, "max", chore_name, context=assignee2_context)
+    await approve_chore(hass, "max", chore_name, context=approver_context)
+    await hass.async_block_till_done()
+
+    # Turn should advance to Lila (not back to Max, not back to Zoë)
+    assert get_chore_state_from_sensor(hass, "lila", chore_name) in (
+        CHORE_STATE_PENDING,
+        CHORE_STATE_DUE,
+    )
+    assert get_chore_state_from_sensor(hass, "max", chore_name) == CHORE_STATE_STANDBY
+
+    # Lila claims and completes
+    await claim_chore(hass, "lila", chore_name, context=assignee3_context)
+    await approve_chore(hass, "lila", chore_name, context=approver_context)
+    await hass.async_block_till_done()
+
+    # Turn should advance to Leo
+    assert get_chore_state_from_sensor(hass, "leo", chore_name) in (
+        CHORE_STATE_PENDING,
+        CHORE_STATE_DUE,
+    )
+    assert get_chore_state_from_sensor(hass, "lila", chore_name) == CHORE_STATE_STANDBY
+
+    # Leo claims and completes
+    await claim_chore(hass, "leo", chore_name, context=assignee4_context)
+    await approve_chore(hass, "leo", chore_name, context=approver_context)
+    await hass.async_block_till_done()
+
+    # Turn should wrap back to Max (round-robin among standbys)
+    assert get_chore_state_from_sensor(hass, "max", chore_name) in (
+        CHORE_STATE_PENDING,
+        CHORE_STATE_DUE,
+    )
+    assert get_chore_state_from_sensor(hass, "leo", chore_name) == CHORE_STATE_STANDBY
+
+    # Unpause Zoë — snap back to primary
+    await coordinator.chore_manager.set_user_chores_paused(zoe_id, paused=False)
+    await hass.async_block_till_done()
+
+    assert get_chore_state_from_sensor(hass, "zoe", chore_name) in (
+        CHORE_STATE_PENDING,
+        CHORE_STATE_DUE,
+    )
+    for slug in ("max", "lila", "leo"):
+        assert (
+            get_chore_state_from_sensor(hass, slug, chore_name) == CHORE_STATE_STANDBY
+        )

@@ -4722,32 +4722,21 @@ class ChoreManager(BaseManager):
                     chore_id, completed_by_assignee_id, method="auto"
                 )
 
-            # Primary-standby: force turn to primary at every reset boundary
-            # Runs AFTER _advance_rotation so signal captures correct previous
-            # Pause-aware: skips paused primary, freezes if all paused (G-5)
+            # Primary-standby: snap turn to primary when active
+            # _advance_rotation() (run above) already handles the primary-paused
+            # case with simple rotation among standbys. This block only needs
+            # to snap back when the primary is active (not paused).
             if (
                 chore_info.get(const.DATA_CHORE_COMPLETION_CRITERIA)
                 == const.COMPLETION_CRITERIA_ROTATION_PRIMARY_STANDBY
             ):
                 assigned = chore_info.get(const.DATA_CHORE_ASSIGNED_USER_IDS, [])
-                if assigned:
-                    target: str | None = assigned[0]
-                    if target is not None and self._is_chore_paused_for_assignee(
-                        target, chore_id
-                    ):
-                        # Primary paused — find first non-paused standby
-                        for candidate in assigned[1:]:
-                            if not self._is_chore_paused_for_assignee(
-                                candidate, chore_id
-                            ):
-                                target = candidate
-                                break
-                        else:
-                            target = None  # All paused, freeze
-                    if target is not None:
-                        chore_info[const.DATA_CHORE_ROTATION_CURRENT_ASSIGNEE_ID] = (
-                            target
-                        )
+                if assigned and not self._is_chore_paused_for_assignee(
+                    assigned[0], chore_id
+                ):
+                    chore_info[const.DATA_CHORE_ROTATION_CURRENT_ASSIGNEE_ID] = (
+                        assigned[0]
+                    )
 
         # Persist and emit (per DEVELOPMENT_STANDARDS.md § 5.3)
         if persist:
@@ -5194,9 +5183,25 @@ class ChoreManager(BaseManager):
                 completion_criteria
                 == const.COMPLETION_CRITERIA_ROTATION_PRIMARY_STANDBY
             ):
-                # Primary-standby: always snaps to primary (index 0)
-                # new_assignee_id is set directly — no method dispatch needed
-                new_assignee_id = assigned_assignees[0] if assigned_assignees else None
+                # Primary-standby: snap to primary unless paused
+                if assigned_assignees and not self._is_chore_paused_for_assignee(
+                    assigned_assignees[0], chore_id
+                ):
+                    new_assignee_id = assigned_assignees[0]
+                elif assigned_assignees and len(assigned_assignees) > 1:
+                    # Primary is paused: simple rotation among standbys
+                    standbys = [
+                        a
+                        for a in assigned_assignees[1:]
+                        if not self._is_chore_paused_for_assignee(a, chore_id)
+                    ]
+                    new_assignee_id = (
+                        ChoreEngine.calculate_next_turn_simple(
+                            standbys, completing_assignee_id
+                        )
+                        if standbys
+                        else None
+                    )
 
         if method == "simple":
             # Simple rotation: round-robin by list index

@@ -1,0 +1,58 @@
+# Test Scenario: PRIMARY & STANDBY MULTI-STANDBY (rotation_primary_standby)
+# =============================================================================
+# Tests simple rotation among standbys when primary is paused.
+# 1 primary (Zoë) + 3 standbys (Max!, Lila, Leo).
+#
+# Contents:
+#   - 1 approver: Mom
+#   - 4 assignees: Zoë (primary), Max!, Lila, Leo (standbys)
+#   - 1 chore: primary-standby with standby_claim_mode=anytime
+# =============================================================================
+
+# System settings
+system:
+  points_label: "Points"
+  points_icon: "mdi:star"
+
+# Assignees (1 primary + 3 standbys)
+assignees:
+  - name: "Zoë"
+    ha_user: "assignee1"
+    dashboard_language: "en"
+    mobile_notify_service: ""
+
+  - name: "Max!"
+    ha_user: "assignee2"
+    dashboard_language: "en"
+    mobile_notify_service: ""
+
+  - name: "Lila"
+    ha_user: "assignee3"
+    dashboard_language: "en"
+    mobile_notify_service: ""
+
+  - name: "Leo"
+    ha_user: "assignee4"
+    dashboard_language: "en"
+    mobile_notify_service: ""
+
+# Approvers
+approvers:
+  - name: "Môm Astrid Stârblüm"
+    ha_user: "approver1"
+    assignees: ["Zoë", "Max!", "Lila", "Leo"]
+    mobile_notify_service: ""
+
+# Chores
+chores:
+  # Primary-standby with 3 standbys
+  - name: "Rotating Standby Chore"
+    assigned_to: ["Zoë", "Max!", "Lila", "Leo"]
+    points: 10.0
+    icon: "mdi:broom"
+    completion_criteria: "rotation_primary_standby"
+    recurring_frequency: "daily"
+    auto_approve: false
+    approval_reset_type: "upon_completion"
+    standby_claim_mode: "anytime"
+    due_window_offset: "1h"
