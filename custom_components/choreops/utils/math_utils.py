@@ -10,6 +10,7 @@ Functions:
     - round_points: Consistent rounding to configured precision
     - apply_multiplier: Multiplier arithmetic with proper rounding
     - calculate_percentage: Progress percentage calculations
+    - calculate_average: Average calculations with zero-count protection
     - parse_points_value: Parse a point-like numeric input with precision rules
     - parse_points_adjust_values: Parse pipe-separated point values (string input)
     - parse_points_adjust_values: Parse and normalize any adjustment value input
@@ -106,6 +107,17 @@ def calculate_percentage(
     if target <= 0:
         return 0.0
     return round_points((current / target) * 100, precision)
+
+
+def calculate_average(
+    total: float,
+    count: float,
+    precision: int = DATA_FLOAT_PRECISION,
+) -> float:
+    """Calculate an average with zero-count protection."""
+    if not count:
+        return 0.0
+    return round_points(float(total) / float(count), precision)
 
 
 def clamp(value: float, min_val: float, max_val: float) -> float:

@@ -428,6 +428,9 @@ class AssigneeChoreDataPeriodEntry(TypedDict, total=False):
     claimed: int
     disapproved: int
     overdue: int
+    overdue_duration_total_seconds: int
+    overdue_duration_count: int
+    overdue_duration_max_seconds: int
     points: float
     longest_streak: int
 
@@ -578,6 +581,8 @@ Common keys (added dynamically at runtime):
 - claimed_today/week/month/year/all_time: int
 - disapproved_today/week/month/year/all_time: int
 - overdue_today/week/month/year/all_time: int
+- avg_overdue_seconds_today/week/month/year/all_time: float
+- longest_overdue_seconds_today/week/month/year/all_time: int
 - current_approved/claimed/overdue/due_today: int
 - total_points_from_chores_today/week/month/year/all_time: float
 - longest_streak_all_time/week/month/year: int
@@ -1162,7 +1167,22 @@ class ChoreOverdueEvent(TypedDict, total=False):
     days_overdue: int  # Required
     due_date: str  # Required: ISO format
     chore_labels: list[str]  # For badge criteria filtering
-    overdue_message_type: str  # Optional: default or steal_available
+    overdue_message_type: str  # Optional: default, steal_available, or standby_needed
+
+
+class ChoreOverdueResolvedEvent(TypedDict, total=False):
+    """Event payload for SIGNAL_SUFFIX_CHORE_OVERDUE_RESOLVED.
+
+    Emitted by: ChoreManager when a chore leaves the overdue state
+    Consumed by: StatisticsManager (overdue duration total/count/max)
+    """
+
+    user_id: str  # Required
+    chore_id: str  # Required
+    chore_name: str  # Required
+    overdue_duration_seconds: int  # Required
+    overdue_started_at: str  # Required: ISO format
+    overdue_resolved_at: str  # Required: ISO format
 
 
 class ChoreRescheduledEvent(TypedDict, total=False):
@@ -1404,6 +1424,7 @@ __all__ = [
     "ChoreDisapprovedEvent",
     "ChoreId",
     "ChoreOverdueEvent",
+    "ChoreOverdueResolvedEvent",
     "ChorePerAssigneeApplicableDays",
     "ChorePerAssigneeDailyMultiTimes",
     "ChorePerAssigneeDueDates",

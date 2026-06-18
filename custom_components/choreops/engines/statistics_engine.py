@@ -257,6 +257,75 @@ class StatisticsEngine:
                 else:
                     all_time_bucket[metric] = current + value
 
+    def record_maximum(
+        self,
+        period_data: dict[str, Any],
+        maximums: Mapping[str, int | float],
+        period_key_mapping: Mapping[str, str] | None = None,
+        include_all_time: bool = True,
+        reference_date: date | datetime | None = None,
+    ) -> None:
+        """Record high-water marks across all period buckets.
+
+        Unlike record_transaction(), this keeps the maximum observed value for
+        each metric in the active daily/weekly/monthly/yearly buckets and the
+        optional all_time bucket.
+
+        Args:
+            period_data: Dictionary containing nested period structures.
+            maximums: Metrics to compare and their observed values.
+            period_key_mapping: Optional mapping from logical period names to
+                               data structure keys. Defaults to standard keys.
+            include_all_time: If True (default), also update all_time maximums.
+            reference_date: Date for period key generation. Defaults to today.
+        """
+        keys = self.get_period_keys(reference_date)
+
+        if period_key_mapping is None:
+            period_key_mapping = {
+                const.PERIOD_DAILY: const.PERIOD_DAILY,
+                const.PERIOD_WEEKLY: const.PERIOD_WEEKLY,
+                const.PERIOD_MONTHLY: const.PERIOD_MONTHLY,
+                const.PERIOD_YEARLY: const.PERIOD_YEARLY,
+            }
+
+        for period_type, period_key in keys.items():
+            data_key = period_key_mapping.get(period_type, period_type)
+            if data_key not in period_data:
+                period_data[data_key] = {}
+            if period_key not in period_data[data_key]:
+                period_data[data_key][period_key] = {}
+
+            bucket = period_data[data_key][period_key]
+            self._apply_maximums(bucket, maximums)
+
+        if include_all_time:
+            if const.PERIOD_ALL_TIME not in period_data:
+                period_data[const.PERIOD_ALL_TIME] = {}
+            all_time_container = period_data[const.PERIOD_ALL_TIME]
+            if const.PERIOD_ALL_TIME not in all_time_container:
+                all_time_container[const.PERIOD_ALL_TIME] = {}
+
+            self._apply_maximums(all_time_container[const.PERIOD_ALL_TIME], maximums)
+
+    @staticmethod
+    def _apply_maximums(
+        bucket: dict[str, Any],
+        maximums: Mapping[str, int | float],
+    ) -> None:
+        """Apply max updates to one period bucket."""
+        for metric, value in maximums.items():
+            current = bucket.get(metric)
+            if isinstance(current, (int, float)):
+                next_value = max(current, value)
+            else:
+                next_value = value
+
+            if isinstance(next_value, float):
+                bucket[metric] = round(next_value, const.DATA_FLOAT_PRECISION)
+            else:
+                bucket[metric] = next_value
+
     # ────────────────────────────────────────────────────────────────
     # Streak Management
     # ────────────────────────────────────────────────────────────────

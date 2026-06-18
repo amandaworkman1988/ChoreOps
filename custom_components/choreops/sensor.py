@@ -122,7 +122,7 @@ from .utils.dt_utils import (
     dt_to_utc,
     dt_today_local,
 )
-from .utils.math_utils import round_points
+from .utils.math_utils import calculate_average, round_points
 
 # Platinum requirement: Parallel Updates
 # Set to 0 (unlimited) for coordinator-based entities that don't poll
@@ -1104,6 +1104,28 @@ class AssigneeChoreStatusSensor(ChoreOpsCoordinatorEntity, SensorEntity):
             const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE,
             period_key_mapping=period_key_mapping,
         )
+        overdue_duration_total = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+            period_key_mapping=period_key_mapping,
+        )
+        overdue_duration_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+            period_key_mapping=period_key_mapping,
+        )
+        avg_overdue_seconds = calculate_average(
+            overdue_duration_total,
+            overdue_duration_count,
+        )
+        longest_overdue_seconds = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+            period_key_mapping=period_key_mapping,
+        )
         disapproved_count = self.coordinator.stats.get_period_total(
             periods,
             const.PERIOD_ALL_TIME,
@@ -1268,6 +1290,8 @@ class AssigneeChoreStatusSensor(ChoreOpsCoordinatorEntity, SensorEntity):
             const.ATTR_CHORE_APPROVALS_COUNT: approvals_count,
             const.ATTR_CHORE_DISAPPROVED_COUNT: disapproved_count,
             const.ATTR_CHORE_OVERDUE_COUNT: overdue_count,
+            const.ATTR_CHORE_AVG_OVERDUE_SECONDS: avg_overdue_seconds,
+            const.ATTR_CHORE_LONGEST_OVERDUE_SECONDS: longest_overdue_seconds,
             # --- 8. Statistics (streaks) ---
             const.ATTR_CHORE_CURRENT_STREAK: current_streak,
             const.ATTR_CHORE_LONGEST_STREAK: highest_streak,
@@ -1667,6 +1691,36 @@ class AssigneeChoresSensor(ChoreOpsCoordinatorEntity, SensorEntity):
             const.DATA_USER_CHORE_DATA_PERIOD_MISSED,
             period_key_mapping=period_key_mapping,
         )
+        all_stats["overdue_all_time"] = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE,
+            period_key_mapping=period_key_mapping,
+        )
+        overdue_duration_total_all_time = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+            period_key_mapping=period_key_mapping,
+        )
+        overdue_duration_count_all_time = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+            period_key_mapping=period_key_mapping,
+        )
+        all_stats["avg_overdue_seconds_all_time"] = calculate_average(
+            overdue_duration_total_all_time,
+            overdue_duration_count_all_time,
+        )
+        all_stats["longest_overdue_seconds_all_time"] = (
+            self.coordinator.stats.get_period_total(
+                chore_periods,
+                const.PERIOD_ALL_TIME,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                period_key_mapping=period_key_mapping,
+            )
+        )
         all_stats["completed_all_time"] = self.coordinator.stats.get_period_total(
             chore_periods,
             const.PERIOD_ALL_TIME,
@@ -1730,6 +1784,8 @@ class AssigneeChoresSensor(ChoreOpsCoordinatorEntity, SensorEntity):
             "approved_today",
             "claimed_today",
             "missed_today",
+            "avg_overdue_seconds_today",
+            "longest_overdue_seconds_today",
             "completed_today",
             "points_today",
         ]:
@@ -1741,6 +1797,8 @@ class AssigneeChoresSensor(ChoreOpsCoordinatorEntity, SensorEntity):
             "approved_week",
             "claimed_week",
             "missed_week",
+            "avg_overdue_seconds_week",
+            "longest_overdue_seconds_week",
             "completed_week",
             "points_week",
             "avg_per_day_week",
@@ -1753,6 +1811,8 @@ class AssigneeChoresSensor(ChoreOpsCoordinatorEntity, SensorEntity):
             "approved_month",
             "claimed_month",
             "missed_month",
+            "avg_overdue_seconds_month",
+            "longest_overdue_seconds_month",
             "completed_month",
             "points_month",
             "avg_per_day_month",
@@ -1765,6 +1825,8 @@ class AssigneeChoresSensor(ChoreOpsCoordinatorEntity, SensorEntity):
             "approved_year",
             "claimed_year",
             "missed_year",
+            "avg_overdue_seconds_year",
+            "longest_overdue_seconds_year",
             "completed_year",
             "points_year",
             "avg_per_day_year",
@@ -1780,6 +1842,8 @@ class AssigneeChoresSensor(ChoreOpsCoordinatorEntity, SensorEntity):
             "completed_all_time",
             "disapproved_all_time",
             "overdue_all_time",
+            "avg_overdue_seconds_all_time",
+            "longest_overdue_seconds_all_time",
             "points_all_time",
             "longest_streak",
             "longest_missed_streak",

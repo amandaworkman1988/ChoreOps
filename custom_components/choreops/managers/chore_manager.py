@@ -176,6 +176,7 @@ class ChoreManager(BaseManager):
             tuple[str | None, str | None, timedelta | None, timedelta | None],
         ] = {}
         self._max_due_cache_entries = 2048
+        self._pending_overdue_resolution_signals: list[dict[str, Any]] = []
 
     async def async_setup(self) -> None:
         """Set up the ChoreManager.
@@ -847,6 +848,7 @@ class ChoreManager(BaseManager):
         else:
             # Persist → Emit (per DEVELOPMENT_STANDARDS.md § 5.3)
             self._coordinator._persist_and_update()
+            self._flush_overdue_resolution_signals()
 
         # Emit lifecycle milestone signal for claim handling.
         #
@@ -1307,6 +1309,7 @@ class ChoreManager(BaseManager):
 
         # Persist → Emit (per DEVELOPMENT_STANDARDS.md § 5.3)
         self._coordinator._persist_and_update()
+        self._flush_overdue_resolution_signals()
 
         if rotation_signal_payload:
             self.emit(
@@ -1427,6 +1430,7 @@ class ChoreManager(BaseManager):
 
         # Persist → Emit (per DEVELOPMENT_STANDARDS.md § 5.3)
         self._coordinator._persist_and_update()
+        self._flush_overdue_resolution_signals()
 
         # Emit disapproval event
         # StatisticsManager._on_chore_disapproved handles cache refresh and entity notification
@@ -1511,6 +1515,7 @@ class ChoreManager(BaseManager):
 
         # Persist → Emit (per DEVELOPMENT_STANDARDS.md § 5.3)
         self._coordinator._persist_and_update()
+        self._flush_overdue_resolution_signals()
 
         # Emit undo signal - EconomyManager listens and handles point withdrawal
         # (Platinum Architecture: signal-first, no cross-manager writes)
@@ -1632,6 +1637,7 @@ class ChoreManager(BaseManager):
         self._update_global_state(chore_id)
 
         self._coordinator._persist()
+        self._flush_overdue_resolution_signals()
         self._coordinator.async_set_updated_data(self._coordinator._data)
 
         # Emit event for NotificationManager to clear approver claim notifications
@@ -2121,8 +2127,11 @@ class ChoreManager(BaseManager):
                 == const.OVERDUE_HANDLING_AT_DUE_DATE_MARK_MISSED_AND_LOCK
             ):
                 # Lock the chore in MISSED state (not claimable)
-                assignee_chore_data[const.DATA_USER_CHORE_DATA_STATE] = (
-                    const.CHORE_STATE_MISSED
+                self._set_assignee_chore_state(
+                    assignee_id,
+                    chore_id,
+                    assignee_chore_data,
+                    const.CHORE_STATE_MISSED,
                 )
                 self._update_global_state(chore_id)
 
@@ -3120,6 +3129,8 @@ class ChoreManager(BaseManager):
 
     def _emit_reset_events(self, reset_events: set[tuple[str, str, str]]) -> None:
         """Emit deferred reset events after the enclosing persist succeeds."""
+        self._flush_overdue_resolution_signals()
+
         for assignee_id, chore_id, chore_name in sorted(reset_events):
             self.emit(
                 const.SIGNAL_SUFFIX_CHORE_STATUS_RESET,
@@ -4612,6 +4623,144 @@ class ChoreManager(BaseManager):
             self._approval_locks[lock_key] = asyncio.Lock()
         return self._approval_locks[lock_key]
 
+    def _set_assignee_chore_state(
+        self,
+        assignee_id: str,
+        chore_id: str,
+        assignee_chore_data: dict[str, Any],
+        new_state: str,
+    ) -> None:
+        """Persist a per-assignee chore state and track overdue entry/exit."""
+        previous_state = cast(
+            "str",
+            assignee_chore_data.get(
+                const.DATA_USER_CHORE_DATA_STATE,
+                const.CHORE_STATE_PENDING,
+            ),
+        )
+        now_iso = dt_now_utc_iso()
+
+        if previous_state == new_state:
+            if new_state == const.CHORE_STATE_OVERDUE:
+                assignee_chore_data.setdefault(
+                    const.DATA_USER_CHORE_DATA_OVERDUE_STARTED_AT,
+                    self._get_overdue_started_at(
+                        assignee_id,
+                        chore_id,
+                        now_iso,
+                    ),
+                )
+            else:
+                assignee_chore_data.pop(
+                    const.DATA_USER_CHORE_DATA_OVERDUE_STARTED_AT,
+                    None,
+                )
+            assignee_chore_data[const.DATA_USER_CHORE_DATA_STATE] = new_state
+            return
+
+        if new_state == const.CHORE_STATE_OVERDUE:
+            assignee_chore_data[const.DATA_USER_CHORE_DATA_OVERDUE_STARTED_AT] = (
+                self._get_overdue_started_at(
+                    assignee_id,
+                    chore_id,
+                    now_iso,
+                )
+            )
+        elif previous_state == const.CHORE_STATE_OVERDUE:
+            self._queue_overdue_resolution_signal(
+                assignee_id,
+                chore_id,
+                assignee_chore_data,
+                now_iso,
+            )
+        else:
+            assignee_chore_data.pop(
+                const.DATA_USER_CHORE_DATA_OVERDUE_STARTED_AT,
+                None,
+            )
+
+        assignee_chore_data[const.DATA_USER_CHORE_DATA_STATE] = new_state
+
+    def _get_overdue_started_at(
+        self,
+        assignee_id: str,
+        chore_id: str,
+        fallback_iso: str,
+    ) -> str:
+        """Return the deadline timestamp that started the overdue interval."""
+        due_date = self.get_due_date(chore_id, assignee_id)
+        if due_date is None:
+            return fallback_iso
+
+        due_date_utc = dt_to_utc(due_date.isoformat())
+        fallback_utc = dt_to_utc(fallback_iso)
+        if due_date_utc is not None and fallback_utc is not None:
+            if due_date_utc <= fallback_utc:
+                return due_date_utc.isoformat()
+
+        return fallback_iso
+
+    def _queue_overdue_resolution_signal(
+        self,
+        assignee_id: str,
+        chore_id: str,
+        assignee_chore_data: dict[str, Any],
+        resolved_at_iso: str,
+    ) -> None:
+        """Queue an overdue duration signal for post-persist emission."""
+        started_at_iso = assignee_chore_data.pop(
+            const.DATA_USER_CHORE_DATA_OVERDUE_STARTED_AT,
+            None,
+        )
+        if not isinstance(started_at_iso, str) or not started_at_iso:
+            const.LOGGER.debug(
+                "Skipping overdue duration signal with missing start timestamp: assignee=%s chore=%s",
+                assignee_id,
+                chore_id,
+            )
+            return
+
+        started_at = dt_to_utc(started_at_iso)
+        resolved_at = dt_to_utc(resolved_at_iso)
+        if started_at is None or resolved_at is None:
+            const.LOGGER.debug(
+                "Skipping overdue duration signal with invalid timestamps: assignee=%s chore=%s started_at=%s resolved_at=%s",
+                assignee_id,
+                chore_id,
+                started_at_iso,
+                resolved_at_iso,
+            )
+            return
+
+        duration_seconds = max(0, int((resolved_at - started_at).total_seconds()))
+        chore_info = cast(
+            "dict[str, Any]",
+            self._coordinator.chores_data.get(chore_id, {}),
+        )
+        self._pending_overdue_resolution_signals.append(
+            {
+                "user_id": assignee_id,
+                "chore_id": chore_id,
+                "chore_name": chore_info.get(const.DATA_CHORE_NAME, ""),
+                const.CHORE_OVERDUE_RESOLVED_EVENT_DURATION_SECONDS: duration_seconds,
+                const.CHORE_OVERDUE_RESOLVED_EVENT_STARTED_AT: started_at_iso,
+                const.CHORE_OVERDUE_RESOLVED_EVENT_RESOLVED_AT: resolved_at_iso,
+            }
+        )
+
+    def _flush_overdue_resolution_signals(self) -> None:
+        """Emit queued overdue duration signals after storage is persisted."""
+        signals = list(getattr(self, "_pending_overdue_resolution_signals", []))
+        if not signals:
+            return
+
+        self._pending_overdue_resolution_signals = []
+        for signal_data in signals:
+            self.emit(
+                const.SIGNAL_SUFFIX_CHORE_OVERDUE_RESOLVED,
+                **signal_data,
+            )
+
     def _transition_chore_state(
         self,
         assignee_id: str,
@@ -4656,7 +4805,12 @@ class ChoreManager(BaseManager):
         assignee_chore_data = self._get_assignee_chore_data(assignee_id, chore_id)
 
         # Update state
-        assignee_chore_data[const.DATA_USER_CHORE_DATA_STATE] = new_state
+        self._set_assignee_chore_state(
+            assignee_id,
+            chore_id,
+            assignee_chore_data,
+            new_state,
+        )
 
         # Phase 2: completed_by_other_chores list management removed
         # SHARED_FIRST blocking is now computed dynamically in can_claim_chore()
@@ -4741,6 +4895,7 @@ class ChoreManager(BaseManager):
         # Persist and emit (per DEVELOPMENT_STANDARDS.md § 5.3)
         if persist:
             self._coordinator._persist()
+            self._flush_overdue_resolution_signals()
 
             # Phase 3 Step 1: Emit rotation signal after persist
             if rotation_signal_payload:
@@ -5541,7 +5696,12 @@ class ChoreManager(BaseManager):
                     state_to_persist,
                 )
                 state_to_persist = const.CHORE_STATE_PENDING
-            assignee_chore_data[const.DATA_USER_CHORE_DATA_STATE] = state_to_persist
+            self._set_assignee_chore_state(
+                assignee_id,
+                chore_id,
+                assignee_chore_data,
+                state_to_persist,
+            )
 
         # Phase 2: completed_by_other_chores list management removed
         # SHARED_FIRST blocking is now computed dynamically in can_claim_chore()

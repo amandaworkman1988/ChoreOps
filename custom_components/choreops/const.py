@@ -246,6 +246,7 @@ SIGNAL_SUFFIX_CHORE_DISAPPROVED: Final = "chore_disapproved"
 SIGNAL_SUFFIX_CHORE_UNDONE: Final = "chore_undone"
 SIGNAL_SUFFIX_CHORE_CLAIM_UNDONE: Final = "chore_claim_undone"
 SIGNAL_SUFFIX_CHORE_OVERDUE: Final = "chore_overdue"
+SIGNAL_SUFFIX_CHORE_OVERDUE_RESOLVED: Final = "chore_overdue_resolved"
 SIGNAL_SUFFIX_CHORE_MISSED: Final = "chore_missed"
 SIGNAL_SUFFIX_CHORE_DUE_REMINDER: Final = "chore_due_reminder"
 SIGNAL_SUFFIX_CHORE_DUE_WINDOW: Final = "chore_due_window"
@@ -1077,6 +1078,7 @@ DATA_USER_CHORE_DATA_LAST_CLAIMED: Final = "last_claimed"
 DATA_USER_CHORE_DATA_LAST_COMPLETED: Final = "last_completed"
 DATA_USER_CHORE_DATA_LAST_DISAPPROVED: Final = "last_disapproved"
 DATA_USER_CHORE_DATA_LAST_OVERDUE: Final = "last_overdue"
+DATA_USER_CHORE_DATA_OVERDUE_STARTED_AT: Final = "overdue_started_at"
 DATA_USER_CHORE_DATA_LAST_MISSED: Final = "last_missed"
 DATA_USER_CHORE_DATA_LAST_LONGEST_STREAK_ALL_TIME: Final = (
     "last_longest_streak_all_time"
@@ -1103,6 +1105,13 @@ DATA_USER_CHORE_DATA_PERIOD_LONGEST_STREAK: Final = (
     "longest_streak"  # All-time: high water mark (HWM)
 )
 DATA_USER_CHORE_DATA_PERIOD_OVERDUE: Final = "overdue"
+DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS: Final = (
+    "overdue_duration_total_seconds"
+)
+DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT: Final = "overdue_duration_count"
+DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: Final = (
+    "overdue_duration_max_seconds"
+)
 DATA_USER_CHORE_DATA_PERIOD_MISSED: Final = "missed"
 DATA_USER_CHORE_DATA_PERIOD_MISSED_STREAK_TALLY: Final = (
     "missed_streak_tally"  # Daily consecutive misses
@@ -1367,6 +1376,32 @@ PRES_USER_CHORES_MISSED_WEEK: Final = "pres_user_chores_missed_week"
 PRES_USER_CHORES_MISSED_MONTH: Final = "pres_user_chores_missed_month"
 PRES_USER_CHORES_MISSED_YEAR: Final = "pres_user_chores_missed_year"
 
+PRES_USER_CHORES_AVG_OVERDUE_SECONDS_TODAY: Final = (
+    "pres_user_chores_avg_overdue_seconds_today"
+)
+PRES_USER_CHORES_AVG_OVERDUE_SECONDS_WEEK: Final = (
+    "pres_user_chores_avg_overdue_seconds_week"
+)
+PRES_USER_CHORES_AVG_OVERDUE_SECONDS_MONTH: Final = (
+    "pres_user_chores_avg_overdue_seconds_month"
+)
+PRES_USER_CHORES_AVG_OVERDUE_SECONDS_YEAR: Final = (
+    "pres_user_chores_avg_overdue_seconds_year"
+)
+
+PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_TODAY: Final = (
+    "pres_user_chores_longest_overdue_seconds_today"
+)
+PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_WEEK: Final = (
+    "pres_user_chores_longest_overdue_seconds_week"
+)
+PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_MONTH: Final = (
+    "pres_user_chores_longest_overdue_seconds_month"
+)
+PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_YEAR: Final = (
+    "pres_user_chores_longest_overdue_seconds_year"
+)
+
 PRES_USER_CHORES_POINTS_TODAY: Final = "pres_user_chores_points_today"
 PRES_USER_CHORES_POINTS_WEEK: Final = "pres_user_chores_points_week"
 PRES_USER_CHORES_POINTS_MONTH: Final = "pres_user_chores_points_month"
@@ -1585,6 +1620,9 @@ CHORE_OVERDUE_EVENT_MESSAGE_TYPE: Final = "overdue_message_type"
 CHORE_OVERDUE_NOTIFICATION_TYPE_DEFAULT: Final = "default"
 CHORE_OVERDUE_NOTIFICATION_TYPE_STEAL_AVAILABLE: Final = "steal_available"
 CHORE_OVERDUE_NOTIFICATION_TYPE_STANDBY_NEEDED: Final = "standby_needed"
+CHORE_OVERDUE_RESOLVED_EVENT_DURATION_SECONDS: Final = "overdue_duration_seconds"
+CHORE_OVERDUE_RESOLVED_EVENT_STARTED_AT: Final = "overdue_started_at"
+CHORE_OVERDUE_RESOLVED_EVENT_RESOLVED_AT: Final = "overdue_resolved_at"
 
 DATA_CHORE_STATE: Final = "state"
 DATA_CHORE_TIMESTAMP: Final = "timestamp"
@@ -2480,6 +2518,8 @@ ATTR_CHORE_MISSED_COUNT: Final = "chore_missed_count"
 ATTR_CHORE_LAST_MISSED: Final = "chore_last_missed"
 ATTR_CHORE_POINTS_EARNED: Final = "chore_points_earned"
 ATTR_CHORE_OVERDUE_COUNT: Final = "chore_overdue_count"
+ATTR_CHORE_AVG_OVERDUE_SECONDS: Final = "chore_avg_overdue_seconds"
+ATTR_CHORE_LONGEST_OVERDUE_SECONDS: Final = "chore_longest_overdue_seconds"
 ATTR_CHORE_DISAPPROVED_COUNT: Final = "chore_disapproved_count"
 ATTR_CHORE_LAST_LONGEST_STREAK_DATE: Final = "chore_last_longest_streak_date"
 ATTR_CHORE_APPROVE_BUTTON_ENTITY_ID: Final = "approve_button_eid"

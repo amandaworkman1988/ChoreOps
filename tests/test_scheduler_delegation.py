@@ -148,6 +148,10 @@ class TestOverdueEventEmission:
         assert event_payload["chore_id"] == chore_id
         assert "days_overdue" in event_payload
         assert "due_date" in event_payload
+        assignee_chore_data = coordinator.assignees_data[zoe_id][
+            const.DATA_USER_CHORE_DATA
+        ][chore_id]
+        assert const.DATA_USER_CHORE_DATA_OVERDUE_STARTED_AT in assignee_chore_data
 
     @pytest.mark.asyncio
     async def test_overdue_check_respects_never_overdue(
