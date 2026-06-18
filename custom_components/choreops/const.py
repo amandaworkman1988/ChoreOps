@@ -350,7 +350,8 @@ SCHEMA_VERSION_STORAGE_ONLY: Final = (
 SCHEMA_VERSION_BETA4: Final = 44  # Post-migration schema checkpoint.
 SCHEMA_VERSION_BETA5: Final = 45  # Legacy schema45 checkpoint.
 SCHEMA_VERSION_1_0_0: Final = 100  # First GA schema checkpoint.
-SCHEMA_VERSION_CURRENT: Final = SCHEMA_VERSION_1_0_0
+SCHEMA_VERSION_1_5_0: Final = 150  # Release 1.5.0 schema checkpoint.
+SCHEMA_VERSION_CURRENT: Final = SCHEMA_VERSION_1_5_0
 
 # Float precision for stored numeric values (points, chore stats, etc.)
 # Prevents Python float arithmetic drift (e.g., 27.499999999999996 → 27.5)
@@ -429,6 +430,7 @@ FREQUENCY_CUSTOM_1_QUARTER: Final = "custom_1_quarter"
 FREQUENCY_CUSTOM_1_WEEK: Final = "custom_1_week"
 FREQUENCY_CUSTOM_1_YEAR: Final = "custom_1_year"
 FREQUENCY_CUSTOM_FROM_COMPLETE: Final = "custom_from_complete"
+FREQUENCY_CUSTOM_FROM_COMPLETE_DATE_ONLY: Final = "custom_from_complete_date_only"
 FREQUENCY_DAILY: Final = "daily"
 FREQUENCY_DAILY_MULTI: Final = "daily_multi"
 FREQUENCY_MONTHLY: Final = "monthly"
@@ -3929,6 +3931,7 @@ CHORE_FREQUENCY_OPTIONS = [
     PERIOD_YEAR_END,
     FREQUENCY_CUSTOM,
     FREQUENCY_CUSTOM_FROM_COMPLETE,
+    FREQUENCY_CUSTOM_FROM_COMPLETE_DATE_ONLY,
 ]
 
 # Frequency options for config flow (excludes DAILY_MULTI which requires helper step)
@@ -3947,6 +3950,7 @@ CHORE_FREQUENCY_OPTIONS_CONFIG_FLOW = [
     PERIOD_YEAR_END,
     FREQUENCY_CUSTOM,
     FREQUENCY_CUSTOM_FROM_COMPLETE,
+    FREQUENCY_CUSTOM_FROM_COMPLETE_DATE_ONLY,
 ]
 
 # Weekday Options
