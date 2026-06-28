@@ -404,29 +404,38 @@ async def async_setup_entry(
                     )
                 )
 
-    # Create per-user chore Pause/Resume buttons (admin & sick-day control)
+    # Create per-user chore Pause/Resume buttons (admin & sick-day control).
+    # Gated via should_create_entity_for_user_assignee so the suffixes must be
+    # registered in const.ENTITY_REGISTRY (WORKFLOW) and survive the startup
+    # remove_conditional_entities() reconciliation.
     for assignee_id, assignee_info in coordinator.assignees_data.items():
         assignee_name = assignee_info.get(
             const.DATA_USER_NAME, f"{const.TRANS_KEY_LABEL_ASSIGNEE} {assignee_id}"
         )
-        entities.append(
-            UserChoresPauseButton(
-                coordinator=coordinator,
-                entry=entry,
-                assignee_id=assignee_id,
-                assignee_name=assignee_name,
-                pause=True,
+        if should_create_entity_for_user_assignee(
+            const.BUTTON_KC_UID_SUFFIX_PAUSE_CHORES, coordinator, assignee_id
+        ):
+            entities.append(
+                UserChoresPauseButton(
+                    coordinator=coordinator,
+                    entry=entry,
+                    assignee_id=assignee_id,
+                    assignee_name=assignee_name,
+                    pause=True,
+                )
             )
-        )
-        entities.append(
-            UserChoresPauseButton(
-                coordinator=coordinator,
-                entry=entry,
-                assignee_id=assignee_id,
-                assignee_name=assignee_name,
-                pause=False,
+        if should_create_entity_for_user_assignee(
+            const.BUTTON_KC_UID_SUFFIX_RESUME_CHORES, coordinator, assignee_id
+        ):
+            entities.append(
+                UserChoresPauseButton(
+                    coordinator=coordinator,
+                    entry=entry,
+                    assignee_id=assignee_id,
+                    assignee_name=assignee_name,
+                    pause=False,
+                )
             )
-        )
 
     # Create reward buttons (Redeem, Approve & Disapprove)
     # Only for default participants or linked profiles with gamification enabled

@@ -28,3 +28,19 @@ chores advance past that user. Pressing Resume clears the pause.
   wanted.
 - **Next update (separate PR):** recurring, time-of-day scheduled pauses per user
   (e.g. every Saturday 5:00pm → Sunday) configured from the admin menu.
+
+## Fix: register suffixes in ENTITY_REGISTRY (required)
+
+ChoreOps governs every entity through `const.ENTITY_REGISTRY` (suffix ->
+`EntityRequirement`). At startup, `SystemManager.remove_conditional_entities()`
+calls `should_create_entity()` for each entity and **removes any whose suffix is
+unknown** ("fail closed"). The pause/resume buttons therefore MUST register their
+suffixes, or they are silently deleted right after creation (logged only at
+debug level):
+
+- `BUTTON_KC_UID_SUFFIX_PAUSE_CHORES: EntityRequirement.WORKFLOW`
+- `BUTTON_KC_UID_SUFFIX_RESUME_CHORES: EntityRequirement.WORKFLOW`
+
+`async_setup_entry` now also gates creation via
+`should_create_entity_for_user_assignee()`, so the buttons are created only for
+workflow-enabled users (matching the Claim/Disapprove buttons).
