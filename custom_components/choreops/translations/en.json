@@ -1800,6 +1800,31 @@
         "data": {
           "confirm": "Confirm Restoration"
         }
+      },
+      "away_schedule_user": {
+        "title": "Away Schedules",
+        "description": "Choose a child to set the recurring times they are away (e.g. at another parent's house).",
+        "data": {
+          "away_user": "Child"
+        }
+      },
+      "away_schedule_edit": {
+        "title": "Away Schedule",
+        "description": "Set recurring windows when {user_name} is away. Chores due inside a window are paused (no missed/overdue); chores at other times are unaffected. Fill in a window's 4 fields to use it; leave them blank to clear it. Windows can cross into the next day.",
+        "data": {
+          "away1_start_day": "Window 1: leaves on",
+          "away1_start_time": "Window 1: leaves at",
+          "away1_end_day": "Window 1: returns on",
+          "away1_end_time": "Window 1: returns at",
+          "away2_start_day": "Window 2: leaves on",
+          "away2_start_time": "Window 2: leaves at",
+          "away2_end_day": "Window 2: returns on",
+          "away2_end_time": "Window 2: returns at",
+          "away3_start_day": "Window 3: leaves on",
+          "away3_start_time": "Window 3: leaves at",
+          "away3_end_day": "Window 3: returns on",
+          "away3_end_time": "Window 3: returns at"
+        }
       }
     },
     "error": {
@@ -1940,7 +1965,8 @@
         "manage_challenge": "Manage Challenge",
         "dashboard_generator": "Manage Dashboard",
         "general_options": "General Options",
-        "done": "Finish Setup"
+        "done": "Finish Setup",
+        "away_schedules": "🧳 Away Schedules (kids' time away)"
       }
     },
     "dashboard_action": {

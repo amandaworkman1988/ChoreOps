@@ -3938,3 +3938,95 @@ def _get_notify_services(hass: HomeAssistant) -> list[dict[str, str]]:
             fullname = f"{const.NOTIFY_DOMAIN}.{service_name}"
             services_list.append({"value": fullname, "label": fullname})
     return services_list
+
+
+# =============================================================================
+# Away schedule (per-user recurring away windows)
+# =============================================================================
+
+
+def _away_field(index: int, part: str) -> str:
+    """Return the flat form-field key for an away-window slot."""
+    return f"away{index}_{part}"
+
+
+def build_away_schedule_schema() -> vol.Schema:
+    """Build the schema for editing a user's recurring away windows.
+
+    Uses a fixed number of optional slots (const.AWAY_SCHEDULE_MAX_WINDOWS).
+    Each slot has a start day/time and an end day/time; slots may span
+    overnight or into the next day. Empty slots are ignored on save.
+    """
+    day_options = [
+        selector.SelectOptionDict(value=key, label=label)
+        for key, label in const.WEEKDAY_OPTIONS.items()
+    ]
+    fields: dict[Any, Any] = {}
+    for i in range(1, const.AWAY_SCHEDULE_MAX_WINDOWS + 1):
+        fields[vol.Optional(_away_field(i, "start_day"))] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=day_options, mode=selector.SelectSelectorMode.DROPDOWN
+            )
+        )
+        fields[vol.Optional(_away_field(i, "start_time"))] = selector.TimeSelector()
+        fields[vol.Optional(_away_field(i, "end_day"))] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=day_options, mode=selector.SelectSelectorMode.DROPDOWN
+            )
+        )
+        fields[vol.Optional(_away_field(i, "end_time"))] = selector.TimeSelector()
+    return vol.Schema(fields)
+
+
+def away_form_to_windows(user_input: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert away-schedule form input into stored window dicts.
+
+    Weekday keys ("sat") are converted to ints (0=Mon..6=Sun) and times are
+    normalized to "HH:MM". Only fully-filled slots are kept.
+    """
+    import uuid
+
+    windows: list[dict[str, Any]] = []
+    for i in range(1, const.AWAY_SCHEDULE_MAX_WINDOWS + 1):
+        start_day = user_input.get(_away_field(i, "start_day"))
+        start_time = user_input.get(_away_field(i, "start_time"))
+        end_day = user_input.get(_away_field(i, "end_day"))
+        end_time = user_input.get(_away_field(i, "end_time"))
+        if not (start_day and start_time and end_day and end_time):
+            continue
+        windows.append(
+            {
+                const.DATA_AWAY_WINDOW_INTERNAL_ID: uuid.uuid4().hex,
+                const.DATA_AWAY_WINDOW_START_DAY: const.WEEKDAY_NAME_TO_INT.get(
+                    str(start_day), 0
+                ),
+                const.DATA_AWAY_WINDOW_START_TIME: str(start_time)[:5],
+                const.DATA_AWAY_WINDOW_END_DAY: const.WEEKDAY_NAME_TO_INT.get(
+                    str(end_day), 0
+                ),
+                const.DATA_AWAY_WINDOW_END_TIME: str(end_time)[:5],
+            }
+        )
+    return windows
+
+
+def windows_to_away_form(windows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Convert stored away windows into suggested form values for the editor."""
+    int_to_name = {value: key for key, value in const.WEEKDAY_NAME_TO_INT.items()}
+    out: dict[str, Any] = {}
+    for i, window in enumerate(
+        windows[: const.AWAY_SCHEDULE_MAX_WINDOWS], start=1
+    ):
+        out[_away_field(i, "start_day")] = int_to_name.get(
+            int(window.get(const.DATA_AWAY_WINDOW_START_DAY, 0)), "mon"
+        )
+        out[_away_field(i, "start_time")] = (
+            f"{str(window.get(const.DATA_AWAY_WINDOW_START_TIME, '00:00'))[:5]}:00"
+        )
+        out[_away_field(i, "end_day")] = int_to_name.get(
+            int(window.get(const.DATA_AWAY_WINDOW_END_DAY, 0)), "mon"
+        )
+        out[_away_field(i, "end_time")] = (
+            f"{str(window.get(const.DATA_AWAY_WINDOW_END_TIME, '00:00'))[:5]}:00"
+        )
+    return out
