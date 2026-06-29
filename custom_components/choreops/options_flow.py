@@ -451,6 +451,9 @@ class ChoreOpsOptionsFlowHandler(config_entries.OptionsFlow):
             if selection == const.OPTIONS_FLOW_GENERAL_OPTIONS:
                 return await self.async_step_manage_general_options()
 
+            if selection == const.OPTIONS_FLOW_AWAY_SCHEDULES:
+                return await self.async_step_away_schedule_user()
+
             if selection == const.OPTIONS_FLOW_DASHBOARD_GENERATOR:
                 return await self.async_step_dashboard_generator()
 
@@ -466,6 +469,7 @@ class ChoreOpsOptionsFlowHandler(config_entries.OptionsFlow):
         main_menu = [
             const.OPTIONS_FLOW_POINTS,
             const.OPTIONS_FLOW_USERS,
+            const.OPTIONS_FLOW_AWAY_SCHEDULES,
             const.OPTIONS_FLOW_CHORES,
             const.OPTIONS_FLOW_BADGES,
             const.OPTIONS_FLOW_REWARDS,
@@ -496,6 +500,63 @@ class ChoreOpsOptionsFlowHandler(config_entries.OptionsFlow):
                 const.PLACEHOLDER_DOCUMENTATION_URL: const.DOC_URL_MAIN_WIKI,
                 const.PLACEHOLDER_SPONSOR_URL: const.DOC_URL_SPONSOR,
             },
+        )
+
+    async def async_step_away_schedule_user(self, user_input=None):
+        """Pick a user whose recurring away schedule to edit."""
+        coordinator = self._get_coordinator()
+        if user_input is not None:
+            self.context[const.DATA_INTERNAL_ID] = user_input[
+                const.OPTIONS_FLOW_INPUT_AWAY_USER
+            ]
+            return await self.async_step_away_schedule_edit()
+        options = [
+            selector.SelectOptionDict(
+                value=uid, label=info.get(const.DATA_USER_NAME, uid)
+            )
+            for uid, info in coordinator.assignees_data.items()
+        ]
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    const.OPTIONS_FLOW_INPUT_AWAY_USER
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            }
+        )
+        return self.async_show_form(
+            step_id=const.OPTIONS_FLOW_STEP_AWAY_SCHEDULE_USER,
+            data_schema=schema,
+        )
+
+    async def async_step_away_schedule_edit(self, user_input=None):
+        """Edit a user's recurring away windows (multiple spans supported)."""
+        coordinator = self._get_coordinator()
+        user_id = self.context.get(const.DATA_INTERNAL_ID)
+        user_info = coordinator.assignees_data.get(user_id, {})
+        user_name = user_info.get(const.DATA_USER_NAME, user_id)
+        if user_input is not None:
+            windows = fh.away_form_to_windows(user_input)
+            coordinator.user_manager.set_user_away_schedule(
+                str(user_id), windows, immediate_persist=True
+            )
+            const.LOGGER.debug(
+                "Saved %d away window(s) for user %s", len(windows), user_name
+            )
+            return await self.async_step_init()
+        schema = fh.build_away_schedule_schema()
+        suggested = fh.windows_to_away_form(
+            list(user_info.get(const.DATA_USER_AWAY_SCHEDULE, []))
+        )
+        schema = self.add_suggested_values_to_schema(schema, suggested)
+        return self.async_show_form(
+            step_id=const.OPTIONS_FLOW_STEP_AWAY_SCHEDULE_EDIT,
+            data_schema=schema,
+            description_placeholders={"user_name": user_name},
         )
 
     async def async_step_manage_entity(self, user_input=None):

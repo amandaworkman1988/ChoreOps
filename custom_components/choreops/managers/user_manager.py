@@ -551,6 +551,33 @@ class UserManager(BaseManager):
         )
         return user_id
 
+    def set_user_away_schedule(
+        self,
+        user_id: str,
+        windows: list[dict[str, Any]],
+        *,
+        immediate_persist: bool = True,
+    ) -> None:
+        """Replace a user's recurring away-schedule windows.
+
+        Each window is a dict with int start_day/end_day (0=Mon..6=Sun) and
+        "HH:MM" start_time/end_time. Written directly so the field is preserved
+        (not subject to user-record normalization).
+        """
+        user_records = self._user_records()
+        if user_id not in user_records:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                translation_placeholders={
+                    "entity_type": const.ITEM_TYPE_USER,
+                    "name": user_id,
+                },
+            )
+        user_records[user_id][const.DATA_USER_AWAY_SCHEDULE] = list(windows)
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
     def update_user(
         self,
         user_id: str,

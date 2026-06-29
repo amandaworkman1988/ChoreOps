@@ -36,7 +36,10 @@ from ..engines.chore_engine import (
     ChoreEngine,
     TransitionEffect,
 )
-from ..engines.schedule_engine import calculate_next_due_date_from_chore_info
+from ..engines.schedule_engine import (
+    calculate_next_due_date_from_chore_info,
+    is_within_away_window,
+)
 from ..helpers.entity_helpers import (
     remove_entities_by_item_id,
     remove_orphaned_assignee_chore_entities,
@@ -4155,6 +4158,13 @@ class ChoreManager(BaseManager):
 
         # Scope 3: Chore\u00d7User — this chore paused for this specific user (future)
         if assignee_id in chore_data.get(const.DATA_CHORE_PAUSED_FOR, []):
+            return True
+
+        # Scope 4: Away schedule - user is currently inside a recurring away
+        # window (e.g. at the other parent's house). Evaluated live each call
+        # using HA local time; no flag-flipping timer required.
+        away_windows = user_data.get(const.DATA_USER_AWAY_SCHEDULE)
+        if away_windows and is_within_away_window(away_windows, dt_util.now()):
             return True
 
         return False

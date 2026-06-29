@@ -1316,3 +1316,46 @@ def calculate_next_multi_daily_due(
     engine = RecurrenceEngine(config)
     ref_utc = reference_time or dt_now_utc()
     return engine.get_next_occurrence(after=ref_utc, require_future=True)
+
+
+def is_within_away_window(
+    windows: "list[dict[str, object]]",
+    now: "datetime",
+) -> bool:
+    """Return True if ``now`` falls inside any recurring weekly away window.
+
+    Each window is a dict with integer ``start_day`` / ``end_day`` (0=Monday ..
+    6=Sunday) and ``start_time`` / ``end_time`` strings ("HH:MM"). Windows may
+    span across days or wrap past the end of the week (e.g. Saturday 17:00 ->
+    Sunday 18:00, or Sunday 22:00 -> Monday 06:00). A window is half-open:
+    the start minute is included, the end minute is excluded.
+
+    Pure function (no Home Assistant deps) so it is unit-testable. ``now`` must
+    already be in the user's local timezone.
+    """
+
+    def _mow(day: int, hm: str) -> int:
+        """Convert (weekday, 'HH:MM') to absolute minute-of-week [0, 10080)."""
+        parts = hm.split(":")
+        hh, mm = parts[0], parts[1]
+        return (int(day) % 7) * 1440 + (int(hh) % 24) * 60 + (int(mm) % 60)
+
+    now_mow = now.weekday() * 1440 + now.hour * 60 + now.minute
+
+    for w in windows or []:
+        try:
+            start = _mow(int(w["start_day"]), str(w["start_time"]))  # type: ignore[arg-type]
+            end = _mow(int(w["end_day"]), str(w["end_time"]))  # type: ignore[arg-type]
+        except (KeyError, ValueError, TypeError):
+            continue
+        if start == end:
+            # Zero-length window: treat as inactive.
+            continue
+        if start < end:
+            if start <= now_mow < end:
+                return True
+        else:
+            # Wraps past end of week (e.g. Sun 22:00 -> Mon 06:00).
+            if now_mow >= start or now_mow < end:
+                return True
+    return False

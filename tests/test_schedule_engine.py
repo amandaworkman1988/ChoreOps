@@ -12,7 +12,7 @@ Tests edge cases per Phase 2a plan:
 - EC-09: MAX_ITERATIONS safety limit (stubbed for loop protection)
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
@@ -23,6 +23,7 @@ from custom_components.choreops import const
 from custom_components.choreops.engines.schedule_engine import (
     RecurrenceEngine,
     calculate_next_due_date,
+    is_within_away_window,
 )
 
 if TYPE_CHECKING:
@@ -784,3 +785,61 @@ class TestNoBaseDate:
 
         result = engine.get_next_occurrence(after=make_utc_dt(2026, 1, 5, 10))
         assert result is None
+
+
+# =============================================================================
+# Test: is_within_away_window (per-user recurring away schedules)
+# =============================================================================
+
+
+class TestIsWithinAwayWindow:
+    """Tests for is_within_away_window — recurring weekly away spans.
+
+    Backs the per-user "away schedule" feature: chores pause while a child is
+    out (e.g. at the other parent's). Windows may span overnight or wrap past
+    the end of the week. ``now`` is assumed already in the user's local tz.
+    """
+
+    MON, TUE, WED, THU, FRI, SAT, SUN = range(7)
+    _BASE = datetime(2026, 6, 1)
+
+    def _dt(self, weekday: int, hh: int, mm: int) -> datetime:
+        d = self._BASE + timedelta(days=(weekday - self._BASE.weekday()) % 7)
+        return d.replace(hour=hh, minute=mm)
+
+    def test_overnight_span_sat_to_sun(self) -> None:
+        w = [{"start_day": self.SAT, "start_time": "17:00",
+              "end_day": self.SUN, "end_time": "18:00"}]
+        assert is_within_away_window(w, self._dt(self.SAT, 18, 0)) is True
+        assert is_within_away_window(w, self._dt(self.SAT, 17, 0)) is True  # start inclusive
+        assert is_within_away_window(w, self._dt(self.SAT, 16, 0)) is False
+        assert is_within_away_window(w, self._dt(self.SUN, 17, 59)) is True
+        assert is_within_away_window(w, self._dt(self.SUN, 18, 0)) is False  # end exclusive
+        assert is_within_away_window(w, self._dt(self.MON, 12, 0)) is False
+
+    def test_wraps_past_end_of_week(self) -> None:
+        w = [{"start_day": self.SUN, "start_time": "22:00",
+              "end_day": self.MON, "end_time": "06:00"}]
+        assert is_within_away_window(w, self._dt(self.SUN, 23, 0)) is True
+        assert is_within_away_window(w, self._dt(self.MON, 5, 0)) is True
+        assert is_within_away_window(w, self._dt(self.MON, 7, 0)) is False
+
+    def test_same_day_window(self) -> None:
+        w = [{"start_day": self.WED, "start_time": "15:00",
+              "end_day": self.WED, "end_time": "20:00"}]
+        assert is_within_away_window(w, self._dt(self.WED, 16, 0)) is True
+        assert is_within_away_window(w, self._dt(self.WED, 21, 0)) is False
+
+    def test_multiple_windows_union(self) -> None:
+        w = [
+            {"start_day": self.SAT, "start_time": "17:00", "end_day": self.SUN, "end_time": "18:00"},
+            {"start_day": self.WED, "start_time": "15:00", "end_day": self.WED, "end_time": "20:00"},
+        ]
+        assert is_within_away_window(w, self._dt(self.SAT, 18, 0)) is True
+        assert is_within_away_window(w, self._dt(self.WED, 16, 0)) is True
+        assert is_within_away_window(w, self._dt(self.TUE, 16, 0)) is False
+
+    def test_empty_and_zero_length(self) -> None:
+        assert is_within_away_window([], self._dt(self.SAT, 18, 0)) is False
+        z = [{"start_day": self.SAT, "start_time": "17:00", "end_day": self.SAT, "end_time": "17:00"}]
+        assert is_within_away_window(z, self._dt(self.SAT, 17, 0)) is False
